@@ -11,8 +11,6 @@ module Main where
 
 --{{{import
 import Data.List (foldl', sort, nub, nubBy)
-import Data.Set (Set, fromList, member, isSubsetOf, union, empty, singleton)
-import qualified Data.Set as Set
 import Control.Monad.State
 import Control.Applicative (Applicative(..), Alternative(..), (<$>) )
 import Text.Parsec hiding (Empty, (<|>), many, State, Error)
@@ -148,7 +146,7 @@ powersetConstruction m@(Automaton qS alphabet δ q0 fS) =
             powerSet (x:xs) = let pxs = powerSet xs
                               in map (x:) pxs ++ pxs
 
-minimizeDFA :: Automaton a -> Automaton (Set a)
+minimizeDFA :: Automaton a -> Automaton [a]
 minimizeDFA = undefined
 -- }}}
 
