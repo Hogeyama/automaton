@@ -20,3 +20,6 @@ executable automaton
                      , mtl
                      , parsec
                      , containers
+                     , array
+                     , union-find-array
+

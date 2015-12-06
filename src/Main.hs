@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes, FlexibleContexts, CPP #-}
 
 --TODO 種々のアルゴリズムの実装
 --     Deltaのデータ構造がよろしくないので改良する
@@ -6,14 +7,14 @@
 module Main where
 
 import Automaton
+import Data.Set
 
 main :: IO ()
 main = do
-        let dfa2 = powersetConstruction nfa2
-        print $ ""    `isAcceptedBy` nfa2 == ""    `isAcceptedBy` dfa2
-        print $ "0"   `isAcceptedBy` nfa2 == "0"   `isAcceptedBy` dfa2
-        print $ "01"  `isAcceptedBy` nfa2 == "01"  `isAcceptedBy` dfa2
-        print $ "010" `isAcceptedBy` nfa2 == "010" `isAcceptedBy` dfa2
+        print $ dfa3
+        putStrLn ""
+        print $ removeUnReachable dfa3
+        --print $ minimizeDFA dfa3
 
 dfa1 :: Automaton String
 dfa1 = Automaton { states      = ["q0","f"]
@@ -39,7 +40,29 @@ nfa2 = Automaton { states      = ["q0","f"]
                                  ]
                    }
 
-
+dfa3 :: Automaton Char
+dfa3 = Automaton { states      = ['a'..'h']
+                 , alphabet    = ['1', '0']
+                 , initState   = 'a'
+                 , finalStates = ['c']
+                 , delta       = [ ('a', Symbol '0', 'b')
+                                 , ('a', Symbol '1', 'f')
+                                 , ('b', Symbol '0', 'g')
+                                 , ('b', Symbol '1', 'c')
+                                 , ('c', Symbol '0', 'a')
+                                 , ('c', Symbol '1', 'c')
+                                 , ('d', Symbol '0', 'c')
+                                 , ('d', Symbol '1', 'g')
+                                 , ('e', Symbol '0', 'h')
+                                 , ('e', Symbol '1', 'f')
+                                 , ('f', Symbol '0', 'c')
+                                 , ('f', Symbol '1', 'g')
+                                 , ('g', Symbol '0', 'g')
+                                 , ('g', Symbol '1', 'e')
+                                 , ('h', Symbol '0', 'g')
+                                 , ('h', Symbol '1', 'c')
+                                 ]
+                   }
 
 printEither :: (Show a) => Either String a -> IO ()
 printEither = either putStrLn print
