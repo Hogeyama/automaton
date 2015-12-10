@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification #-}
 
 module Automaton where
 
@@ -14,14 +15,15 @@ import Control.Applicative (Applicative(..), Alternative(..), (<$>) )
 --}}}
 
 --data宣言-- {{{
-data Automaton a = Automaton { states :: [a]
+data Automaton = forall a. (Eq a, Ord a, Show a) =>
+                  Automaton { states :: [a]
                              , alphabet :: Alphabet
                              , delta :: Delta a
                              , initState :: a
                              , finalStates :: [a]
                              }
 
-instance (Show a) => Show (Automaton a) where
+instance Show Automaton where
         show (Automaton qS alphabet δ q0 fS) =
             "Q:  " ++ show qS ++ "\n" ++
             "Σ:  " ++ show alphabet ++ "\n" ++
@@ -66,14 +68,16 @@ listFromDelta m = Map.foldrWithKey' f [] m
         where f p δp l = l ++ map (\(x,q) -> (p,x,q)) δp
 -- }}}
 
---{{{isDFA
-isDFA :: (Eq a, Ord a) => Automaton a -> Either String Bool
-isDFA (Automaton _Q _Σ δ q0 _F)
-    | null _Q                    = Left "error: Q is empty"
-    | q0 `notElem` _Q            = Left $ "error: q0 not in Q:"
-    | not (_F `isSubsetOf` _Q)   = Left "error: F \\not \\in Q"
-    | not (δ `isFuncOn` (_Q,_Σ)) = Right False --NFA
-    | otherwise                  = Right True  --DFA
+--{{{type of Automaton
+data FAType = DFA | NFA | Error String
+
+typeOf :: Automaton -> FAType
+typeOf (Automaton _Q _Σ δ q0 _F)
+    | null _Q                    = Error "error: Q is empty"
+    | q0 `notElem` _Q            = Error $ "error: q0 not in Q:"
+    | not (_F `isSubsetOf` _Q)   = Error "error: F \\not \\in Q"
+    | not (δ `isFuncOn` (_Q,_Σ)) = NFA
+    | otherwise                  = DFA
     where
         isSubsetOf :: (Eq a) => [a] -> [a] -> Bool
         isSubsetOf a b = all (`elem` b) a
@@ -88,7 +92,7 @@ str2word :: String -> Word'
 str2word = map Symbol
 
 transitDFA :: (Eq a, Ord a) => Delta a -> a -> Symbol -> a
-transitDFA δ q Null = q --XXX不要では
+transitDFA δ q Null = q
 transitDFA δ q x = let l = [ q2 | (x', q2) <- δ `partialApp` q, x==x']
                    in case l of [x]       -> x
                                 otherwise -> error "transitDFA: なんでやねん"
@@ -105,32 +109,31 @@ nullTransit δ qs = let newqs = concatMap (\q -> [ q' | (Null, q') <- δ `partia
                    in if null newqs then qs
                                     else nullTransit δ $ newqs ++ qs -- δいる理由は?
 
-computation :: (Eq a, Ord a) => String -> Automaton a -> Either String [a]
-computation x m@(Automaton qS alphabet δ q0 fS) =
+isAcceptedBy :: String -> Automaton -> Either String Bool
+isAcceptedBy x m@(Automaton qS alphabet δ q0 fS) =
         if (`notElem` alphabet) `any` x
             then Left $ "error: \"" ++ x ++ "\" is not a word on \"" ++ alphabet ++ "\""
-            else case isDFA m of
-                   Right True  -> let w = str2word x
-                                  in Right [transitsDFA δ q0 w]
-                   Right False -> let w = str2word x
-                                  in Right $ transitsNFA δ [q0] w
-                   Left err -> Left err
+            else case typeOf m of
+                   DFA -> let w = str2word x
+                                  in if (transitsDFA δ q0 w) `elem` fS
+                                         then Right True
+                                         else Right False
+                   NFA -> let w = str2word x
+                                  in if (`elem` fS) `any` (transitsNFA δ [q0] w)
+                                         then Right True
+                                         else Right False
+                   Error err -> Left err
 
-isAcceptedBy :: (Eq a, Ord a) => String -> Automaton a -> Either String Bool
-isAcceptedBy x m@(Automaton qS alphabet δ q0 fS) =
-        case computation x m of
-            Right qs -> if (`notElem` fS) `all` qs then Right False else Right True
-            Left err -> Left err
-
-sizeOf :: Automaton a -> Int
+sizeOf :: Automaton -> Int
 sizeOf (Automaton qS _ _ _ _) = length qS
 -- }}}
 
 --algorithms-- {{{
-powersetConstruction :: (Eq a, Ord a) => Automaton a -> Automaton (Set' a)-- {{{
---make sure that the automaton is not DFA
+powersetConstruction :: Automaton -> Automaton --{{{
 powersetConstruction m@(Automaton qS alphabet δ q0 fS) =
-            Automaton newqS alphabet newδ newq0 newfS
+        case typeOf m of
+            DFA -> m
+            NFA -> Automaton newqS alphabet newδ newq0 newfS
         where
             newq0 = Set' $ nullTransit δ [q0]
             newqS = map Set' pqS
@@ -146,12 +149,48 @@ powersetConstruction m@(Automaton qS alphabet δ q0 fS) =
             powerSet (x:xs) = let pxs = powerSet xs in map (x:) pxs ++ pxs
 -- }}}
 
-minimizeDFA :: (Eq a, Ord a) => Automaton a -> Automaton (Set' a)-- {{{
-minimizeDFA m = let m' = removeUnReachable m
-                    eqvSet = getEqvStates m'
-                in groopState m' eqvSet
+minimizeDFA :: Automaton -> Automaton --{{{
+minimizeDFA m = minimizeDFA' $ removeUnReachable m
 
-removeUnReachable :: (Eq a, Ord a) => Automaton a -> Automaton a
+--if m might has unreachable state, use minimizeDFA
+minimizeDFA' :: Automaton -> Automaton
+minimizeDFA' m@(Automaton qS alphabet δ q0 fS) = minimizedAutomaton
+    where
+        eqvSet = let complementF = filter (`notElem` fS) qS
+                     marked    = Set.fromList [(p,q) | p <- fS, q <- complementF, p<q]
+                     unMarked  = Set.fromList $ [(p,q) | p <- fS, q <- fS, p<q] ++ [(p,q) | p <- complementF, q <- complementF, p<q]
+                     (_, unMarked') = run (marked, unMarked)
+                 in unMarked'
+            where
+                 run (marked, unMarked) =
+                     let l = flip Set.filter unMarked $ \(p,q) ->
+                             flip any alphabet $ \a ->
+                             let pa = transitDFA δ p (Symbol a)
+                                 qa = transitDFA δ q (Symbol a)
+                             in (pa, qa) `Set.member` marked || (qa, pa) `Set.member` marked
+                     in if Set.null l
+                            then (marked, unMarked)
+                            else run (marked `Set.union` l, unMarked `Set.difference` l)
+        minimizedAutomaton = runST $ do
+                --initialization for eqv grouping
+                ufTree <- UST.new (sizeOf m) [q0]
+                let dic     = Map.fromList $ zip qS ([0..]::[Int])
+                    keyOf q = dic Map.! q
+                    mapAnnotate q n b = b >> UST.annotate ufTree n [q] >> return ()
+                Map.foldrWithKey' mapAnnotate (return ()) dic
+                --make eqv groop
+                let union (p,q) = UST.merge ufTree (\p q->(p++q,())) (keyOf p) (keyOf q)
+                forM_ eqvSet union
+                --make Automaton
+                let φ q = snd <$> UST.lookup ufTree (keyOf q)
+                newq0 <- Set' <$> φ q0
+                newqS <- map Set' . nub <$> mapM φ qS
+                newfS <- map Set' . filter (\qs -> (`elem` fS) `any` qs) <$> mapM φ qS
+                newδ  <- (listToDelta newqS . nub) <$>
+                         mapM (\(p,x,q)-> do {p' <- φ p; q' <- φ q; return (Set' p', x, Set' q')}) (listFromDelta δ)
+                return $ Automaton newqS alphabet newδ newq0 newfS
+
+removeUnReachable :: Automaton -> Automaton
 removeUnReachable m@(Automaton qS alphabet δ q0 fS) =
         let reachableFrom qs = let l = nub $ concatMap (\q -> [ q' | (_, q') <- δ `partialApp` q, q' `notElem` qs]) qs
                                in if null l then qs else reachableFrom $ l ++ qs
@@ -160,73 +199,20 @@ removeUnReachable m@(Automaton qS alphabet δ q0 fS) =
             newδ  = Map.filterWithKey (\q _ -> q `elem` newqS) $
                     Map.map (\l -> [(x,q)| (x,q) <- l, q `elem` newqS]) δ
         in Automaton newqS alphabet newδ q0 newfS
-
-getEqvStates :: (Eq a, Ord a) => Automaton a -> Set (a,a)
-getEqvStates m@(Automaton qS alphabet δ q0 fS) =
-            let complementF = filter (`notElem` fS) qS
-                marked    = Set.fromList [(p,q) | p <- fS, q <- complementF, p<q]
-                unMarked  = Set.fromList $ [(p,q) | p <- fS, q <- fS, p<q] ++ [(p,q) | p <- complementF, q <- complementF, p<q]
-                (_, unMarked') = run (marked, unMarked)
-            in unMarked'
-        where
-            run (marked, unMarked) =
-                let l = flip Set.filter unMarked $ \(p,q) ->
-                        flip any alphabet $ \a ->
-                        let pa = transitDFA δ p (Symbol a)
-                            qa = transitDFA δ q (Symbol a)
-                        in (pa, qa) `Set.member` marked || (qa, pa) `Set.member` marked
-                in if Set.null l
-                       then (marked, unMarked)
-                       else run (marked `Set.union` l, unMarked `Set.difference` l)
-
-groopState :: (Eq a, Ord a) => Automaton a -> Set (a,a) -> Automaton (Set' a)--Automaton (Set' a)
-groopState m@(Automaton qS alphabet δ q0 fS) eqvSet = runST $ do
-        --initialize
-        ufTree <- UST.new (sizeOf m) [q0]
-        let dic     = Map.fromList $ zip qS ([0..]::[Int])
-            keyOf q = dic Map.! q
-            mapAnnotate q n b = b >> UST.annotate ufTree n [q] >> return ()
-        Map.foldrWithKey' mapAnnotate (return ()) dic
-        --make eqv groop
-        let union (p,q) = UST.merge ufTree (\p q->(p++q,())) (keyOf p) (keyOf q)
-        forM_ eqvSet union
-        --make Automaton
-        let φ q = snd <$> UST.lookup ufTree (keyOf q)
-        newq0 <- Set' <$> φ q0
-        newqS <- map Set' . nub <$> mapM φ qS
-        newfS <- map Set' . filter (\qs -> (`elem` fS) `any` qs) <$> mapM φ qS
-        newδ  <- (listToDelta newqS . nub) <$> mapM (\(p,x,q)-> do {p' <- φ p; q' <- φ q ; return (Set' p', x, Set' q')}) (listFromDelta δ)
-        return $ Automaton newqS alphabet newδ newq0 newfS
 -- }}}
 
---completment {{{
-commplementDFA :: (Eq a, Ord a) => Automaton a -> Automaton a
-commplementDFA m@(Automaton qS alphabet δ q0 fS) =
-        let newfS = filter (`notElem` fS) qS
-        in Automaton qS alphabet δ q0 newfS
 
-completmentNFA :: (Eq a, Ord a) => Automaton a -> Automaton (Set' a)
-completmentNFA = commplementDFA . powersetConstruction
--- }}}
 
-acceptNoWord :: (Eq a, Ord a) => Automaton a -> Bool-- {{{効率悪い
-acceptNoWord m = let Automaton _ _ _ _ fS = removeUnReachable m
-                 in null fS
--- }}}
 
-product :: (Eq a, Ord a, Eq b, Ord b) => Automaton a -> Automaton b -> Automaton (a,b) --{{{ O(QaQbΣΣ)
-product m1@(Automaton qS1 alphabet δ1 q01 fS1) m2@(Automaton qS2 alphabet' δ2 q02 fS2) =
-    if sort alphabet /= sort alphabet'
-      then error "product: 2 alphabets must be the same."
-      else let newqS = [(q1, q2)| q1 <- qS1, q2 <- qS2]
-               newfS = [(q1, q2)| q1 <- fS1, q2 <- fS2]
-               newq0 = (q01, q02)
-               newδ  = let f (q1,q2) δ = let l1 = δ1 `partialApp` q1
-                                             l2 = δ2 `partialApp` q2
-                                             l  = concatMap (\(x,p2) -> [(x,(p1,p2))| (x',p1)<-l1, x==x']) l2
-                                         in Map.insert (q1,q2) l δ
-                       in foldr f Map.empty newqS
-           in Automaton newqS alphabet newδ newq0 newfS
---}}}
+
+
+
+
+
+
+
 
 -- }}}
+
+
+
